@@ -20,6 +20,32 @@ A mobile-friendly web app for logging prayers and daily Bible reading, with read
 - [canvas-confetti](https://github.com/catdad/canvas-confetti) — streak celebrations
 - Google Fonts: Inter + Lora
 
+## Project structure
+The working app is still the single `index.html` in the repo root. The folders below are where its code will move and where the backend will go. Each one has a short README explaining its purpose.
+
+```
+├── index.html            the live app
+├── frontend/             runs in the browser
+│   ├── assets/           images, icons, fonts, styles
+│   ├── components/       UI shared between features
+│   ├── services/         storage and backend access
+│   └── features/
+│       ├── accounts/     sign-up, log-in, sessions
+│       ├── prayers/      prayer log
+│       ├── bible-reading/ reading log
+│       ├── streaks/      streaks and heatmap
+│       ├── groups/       groups, chat, roles
+│       └── community/    public feed
+├── backend/              server-side code (not built yet)
+│   ├── auth/             real accounts and verification
+│   └── functions/        trusted server actions
+├── database/             shared database (not built yet)
+│   ├── migrations/       table definitions
+│   ├── policies/         who can see what
+│   └── seeds/            test data
+└── docs/                 notes and decisions
+```
+
 ## Run it
 Open `index.html` in a browser. That's it.
 
