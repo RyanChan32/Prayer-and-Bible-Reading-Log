@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#fafaf9">
-<title>Abide</title>
+<title>One Day Closer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:wght@500;600;700&display=swap" rel="stylesheet">
@@ -26,7 +26,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
 <script>
 /* ============================================================
-   Abide — prototype
+   One Day Closer — prototype
    Data layer: localStorage (this browser only).
    Swap `store` + auth for a real backend (e.g. Supabase) later;
    every query below already filters by the signed-in user.
@@ -136,7 +136,7 @@ function app() {
       const d = { user: { name: this.user.name, email: this.user.email }, prayers: this.myPrayers, readings: this.myReadings, exportedAt: new Date().toISOString() };
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' }));
-      a.download = 'abide-export.json'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      a.download = 'one-day-closer-export.json'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     },
 
     /* ---------- helpers ---------- */
@@ -338,7 +338,7 @@ function app() {
   <div class="w-full max-w-sm">
     <div class="text-center mb-8">
       <div class="text-5xl mb-3">🕊️</div>
-      <h1 class="font-serif text-4xl font-semibold text-stone-900">Abide</h1>
+      <h1 class="font-serif text-4xl font-semibold text-stone-900">One Day Closer</h1>
       <p class="text-stone-500 mt-2">Your daily prayer &amp; Bible reading journal</p>
     </div>
     <div class="card p-6">
@@ -367,7 +367,7 @@ function app() {
 <div>
   <header class="sticky top-0 z-30 bg-white/90 backdrop-blur border-b border-stone-200">
     <div class="max-w-3xl mx-auto px-4 h-14 flex items-center gap-4">
-      <button class="flex items-center gap-2" @click="go('prayers')"><span class="text-xl">🕊️</span><span class="font-serif text-xl font-semibold text-stone-900">Abide</span></button>
+      <button class="flex items-center gap-2" @click="go('prayers')"><span class="text-xl">🕊️</span><span class="font-serif text-xl font-semibold text-stone-900">One Day Closer</span></button>
       <nav class="hidden md:flex gap-1 ml-4">
         <template x-for="t in tabs" :key="t.id">
           <button @click="go(t.id)" class="px-3 py-1.5 rounded-lg text-sm font-medium transition" :class="tab===t.id?'bg-amber-50 text-amber-800':'text-stone-500 hover:text-stone-800'" x-text="t.label"></button>
