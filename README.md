@@ -1,4 +1,4 @@
-# Abide — Prayer & Bible Reading Journal (Prototype v1)
+# One Day Closer — Prayer & Bible Reading Journal (Prototype v1)
 
 A mobile-friendly web app for logging prayers and daily Bible reading, with reading streaks and prayer groups.
 
