@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#fafaf9">
+<title>Abide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config={theme:{extend:{fontFamily:{sans:['Inter','system-ui','sans-serif'],serif:['Lora','Georgia','serif']}}}}</script>
+<style type="text/tailwindcss">
+  [x-cloak]{display:none!important}
+  .input{@apply w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-800 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500}
+  .btn{@apply inline-flex items-center justify-center gap-1.5 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-700 disabled:opacity-50 transition}
+  .btn-outline{@apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50 transition}
+  .btn-ghost{@apply inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-stone-500 hover:bg-stone-100 hover:text-stone-800 transition}
+  .card{@apply bg-white rounded-2xl border border-stone-200 shadow-sm}
+  .chip{@apply inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-amber-200}
+  .label{@apply block text-xs font-medium text-stone-500 mb-1}
+  .avatar{@apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xs font-semibold text-amber-800}
+  .section-title{@apply font-serif text-2xl font-semibold text-stone-900}
+  .date-head{@apply text-xs font-semibold uppercase tracking-wide text-stone-400 mb-2 mt-6}
+</style>
+<script defer src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+<script>
+/* ============================================================
+   Abide — prototype
+   Data layer: localStorage (this browser only).
+   Swap `store` + auth for a real backend (e.g. Supabase) later;
+   every query below already filters by the signed-in user.
+   ============================================================ */
+const DB_KEY = 'abide_db_v1';
+const SESSION_KEY = 'abide_session';
+
+const BOOKS = ('Genesis:50|Exodus:40|Leviticus:27|Numbers:36|Deuteronomy:34|Joshua:24|Judges:21|Ruth:4|1 Samuel:31|2 Samuel:24|1 Kings:22|2 Kings:25|1 Chronicles:29|2 Chronicles:36|Ezra:10|Nehemiah:13|Esther:10|Job:42|Psalms:150|Proverbs:31|Ecclesiastes:12|Song of Solomon:8|Isaiah:66|Jeremiah:52|Lamentations:5|Ezekiel:48|Daniel:12|Hosea:14|Joel:3|Amos:9|Obadiah:1|Jonah:4|Micah:7|Nahum:3|Habakkuk:3|Zephaniah:3|Haggai:2|Zechariah:14|Malachi:4|'
+  + 'Matthew:28|Mark:16|Luke:24|John:21|Acts:28|Romans:16|1 Corinthians:16|2 Corinthians:13|Galatians:6|Ephesians:6|Philippians:4|Colossians:4|1 Thessalonians:5|2 Thessalonians:3|1 Timothy:6|2 Timothy:4|Titus:3|Philemon:1|Hebrews:13|James:5|1 Peter:5|2 Peter:3|1 John:5|2 John:1|3 John:1|Jude:1|Revelation:22')
+  .split('|').map(s => { const [name, ch] = s.split(':'); return { name, chapters: +ch }; });
+const bookChapters = b => (BOOKS.find(x => x.name === b) || { chapters: 1 }).chapters;
+const MILESTONES = [3, 7, 14, 21, 30, 50, 75, 100, 150, 200, 365];
+
+const emptyDb = () => ({ users: [], prayers: [], readings: [], groups: [], messages: [] });
+const store = {
+  load() { try { return { ...emptyDb(), ...JSON.parse(localStorage.getItem(DB_KEY)) }; } catch { return emptyDb(); } },
+  save(d) { localStorage.setItem(DB_KEY, JSON.stringify(d)); }
+};
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+async function hash(s) {
+  if (window.crypto && crypto.subtle) {
+    const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+    return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('');
+  }
+  let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return 'x' + h;
+}
+const pad = n => String(n).padStart(2, '0');
+const localDate = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const parseLocal = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+function groupByDate(list) {
+  const m = {};
+  for (const x of list) (m[x.date] ??= []).push(x);
+  return Object.keys(m).sort().reverse().map(d => ({ date: d, items: m[d].sort((a, b) => b.createdAt - a.createdAt) }));
+}
+
+function app() {
+  return {
+    db: store.load(),
+    user: null,
+    tab: 'prayers',
+    tabs: [
+      { id: 'prayers', label: 'Prayers', icon: '🙏' },
+      { id: 'reading', label: 'Bible', icon: '📖' },
+      { id: 'groups', label: 'Groups', icon: '👥' },
+      { id: 'community', label: 'Community', icon: '🌍' }
+    ],
+    books: BOOKS,
+    toast: '',
+    authMode: 'login', authForm: { name: '', email: '', password: '' }, authError: '', busy: false,
+    pForm: { text: '', tags: '', isPublic: false, date: localDate() }, pFilter: '', pSearch: '',
+    rForm: { date: localDate(), book: 'John', chapter: 1, chapterEnd: '', vStart: '', vEnd: '', notes: '', tags: '', isPublic: false }, rFilter: '',
+    gForm: { name: '', description: '' }, activeGroupId: null, groupView: 'chat', chatText: '', inviteEmail: '', gEdit: { name: '', description: '' },
+
+    init() {
+      const s = sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY);
+      if (s) this.user = this.db.users.find(u => u.id === s) || null;
+      // live sync between tabs (lets you test groups with two accounts in two tabs)
+      window.addEventListener('storage', e => {
+        if (e.key !== DB_KEY) return;
+        this.db = store.load();
+        if (this.user) this.user = this.db.users.find(u => u.id === this.user.id) || null;
+        this.$nextTick(() => this.scrollChat());
+      });
+    },
+    persist() { store.save(this.db); },
+    flash(m) { this.toast = m; clearTimeout(this._t); this._t = setTimeout(() => this.toast = '', 2600); },
+    go(id) { this.tab = id; window.scrollTo(0, 0); },
+
+    /* ---------- auth ---------- */
+    async signup() {
+      const { name, email, password } = this.authForm; const e = email.trim().toLowerCase();
+      if (!name.trim()) return this.authError = 'Please enter a display name.';
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return this.authError = 'Please enter a valid email.';
+      if (password.length < 6) return this.authError = 'Password must be at least 6 characters.';
+      if (this.db.users.some(u => u.email === e)) return this.authError = 'An account with that email already exists.';
+      this.busy = true;
+      const salt = uid();
+      const u = { id: uid(), name: name.trim(), email: e, salt, passHash: await hash(salt + password), createdAt: Date.now() };
+      this.db.users.push(u); this.persist(); this.busy = false; this.startSession(u);
+    },
+    async login() {
+      const e = this.authForm.email.trim().toLowerCase();
+      const u = this.db.users.find(x => x.email === e);
+      this.busy = true;
+      const ok = u && (await hash(u.salt + this.authForm.password)) === u.passHash;
+      this.busy = false;
+      if (!ok) return this.authError = 'Email or password is incorrect.';
+      this.startSession(u);
+    },
+    startSession(u) {
+      this.user = u;
+      sessionStorage.setItem(SESSION_KEY, u.id); localStorage.setItem(SESSION_KEY, u.id);
+      this.authForm = { name: '', email: '', password: '' }; this.authError = ''; this.tab = 'prayers'; this.activeGroupId = null;
+      this.flash(`Welcome, ${u.name.split(' ')[0]}!`);
+    },
+    logout() { sessionStorage.removeItem(SESSION_KEY); localStorage.removeItem(SESSION_KEY); this.user = null; this.activeGroupId = null; },
+    async seedDemo() {
+      for (const [n, e] of [['Grace Lee', 'grace@demo.app'], ['John Park', 'john@demo.app']]) {
+        if (!this.db.users.some(u => u.email === e)) {
+          const salt = uid();
+          this.db.users.push({ id: uid(), name: n, email: e, salt, passHash: await hash(salt + 'demo123'), createdAt: Date.now() });
+        }
+      }
+      this.persist(); this.flash('Demo accounts ready · password: demo123');
+    },
+    exportData() {
+      const d = { user: { name: this.user.name, email: this.user.email }, prayers: this.myPrayers, readings: this.myReadings, exportedAt: new Date().toISOString() };
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' }));
+      a.download = 'abide-export.json'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    },
+
+    /* ---------- helpers ---------- */
+    parseTags(s) { return [...new Set(s.split(',').map(t => t.trim().replace(/^#/, '').toLowerCase()).filter(Boolean))]; },
+    userById(id) { return this.db.users.find(u => u.id === id); },
+    userName(id) { return this.userById(id)?.name || 'Unknown'; },
+    userEmail(id) { return this.userById(id)?.email || ''; },
+    initials(id) { return this.userName(id).split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase(); },
+    fmtDate(ds) {
+      const today = localDate(), y = new Date(); y.setDate(y.getDate() - 1);
+      if (ds === today) return 'Today'; if (ds === localDate(y)) return 'Yesterday';
+      return parseLocal(ds).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+    },
+    fmtTime(ts) { return new Date(ts).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); },
+
+    /* ---------- prayers ---------- */
+    get myPrayers() { return this.user ? this.db.prayers.filter(p => p.userId === this.user.id) : []; },
+    get prayerTags() { return [...new Set(this.myPrayers.flatMap(p => p.tags))].sort(); },
+    get prayersByDate() {
+      const q = this.pSearch.trim().toLowerCase();
+      return groupByDate(this.myPrayers.filter(p => (!this.pFilter || p.tags.includes(this.pFilter)) && (!q || p.text.toLowerCase().includes(q))));
+    },
+    addPrayer() {
+      const text = this.pForm.text.trim(); if (!text) return;
+      this.db.prayers.push({ id: uid(), userId: this.user.id, text, tags: this.parseTags(this.pForm.tags), isPublic: this.pForm.isPublic, answered: false, date: this.pForm.date || localDate(), createdAt: Date.now() });
+      this.persist(); this.pForm = { text: '', tags: '', isPublic: false, date: localDate() }; this.flash('Prayer saved');
+    },
+    toggleAnswered(p) { p.answered = !p.answered; this.persist(); if (p.answered) this.celebrate(false); },
+    togglePublic(p) { p.isPublic = !p.isPublic; this.persist(); this.flash(p.isPublic ? 'Now visible in Community' : 'Now private'); },
+    deletePrayer(p) { if (!confirm('Delete this prayer?')) return; this.db.prayers = this.db.prayers.filter(x => x.id !== p.id); this.persist(); },
+
+    /* ---------- bible reading ---------- */
+    get myReadings() { return this.user ? this.db.readings.filter(r => r.userId === this.user.id) : []; },
+    get readingTags() { return [...new Set(this.myReadings.flatMap(r => r.tags))].sort(); },
+    get readingsByDate() { return groupByDate(this.myReadings.filter(r => !this.rFilter || r.tags.includes(this.rFilter))); },
+    get readDays() { return new Set(this.myReadings.map(r => r.date)); },
+    get readToday() { return this.readDays.has(localDate()); },
+    get streak() {
+      const s = this.readDays, d = new Date();
+      if (!s.has(localDate(d))) d.setDate(d.getDate() - 1);
+      let n = 0; while (s.has(localDate(d))) { n++; d.setDate(d.getDate() - 1); }
+      return n;
+    },
+    get longestStreak() {
+      let best = 0, cur = 0, prev = null;
+      for (const ds of [...this.readDays].sort()) {
+        const t = parseLocal(ds);
+        cur = prev && Math.round((t - prev) / 864e5) === 1 ? cur + 1 : 1;
+        best = Math.max(best, cur); prev = t;
+      }
+      return best;
+    },
+    get streakMessage() {
+      if (this.readToday) return `You've read today. Come back tomorrow to make it ${this.streak + 1}.`;
+      if (this.streak) return `Read today to keep your ${this.streak}-day streak alive.`;
+      return 'Log a reading to start a streak.';
+    },
+    get heatmap() {
+      const counts = {}; for (const r of this.myReadings) counts[r.date] = (counts[r.date] || 0) + 1;
+      const start = new Date(); start.setDate(start.getDate() - 77 - start.getDay());
+      const out = [], today = localDate();
+      for (const d = new Date(start); localDate(d) <= today; d.setDate(d.getDate() + 1)) { const k = localDate(d); out.push({ date: k, count: counts[k] || 0 }); }
+      return out;
+    },
+    refOf(r) {
+      const c = +r.chapter, ce = r.chapterEnd ? +r.chapterEnd : null, vs = r.vStart ? +r.vStart : null, ve = r.vEnd ? +r.vEnd : null;
+      let s = `${r.book} ${c}`;
+      if (ce && ce !== c) s += (vs ? ':' + vs : '') + '–' + ce + (ve ? ':' + ve : '');
+      else if (vs) s += ':' + vs + (ve && ve !== vs ? '–' + ve : '');
+      return s;
+    },
+    passageUrl(r) { return 'https://www.biblegateway.com/passage/?search=' + encodeURIComponent(this.refOf(r)); },
+    addReading() {
+      const f = this.rForm, max = bookChapters(f.book), c = +f.chapter;
+      if (!c || c < 1 || c > max) return this.flash(`${f.book} has ${max} chapter${max > 1 ? 's' : ''}`);
+      const ce = f.chapterEnd ? +f.chapterEnd : null;
+      if (ce && (ce < c || ce > max)) return this.flash('Check the ending chapter');
+      const vs = f.vStart ? +f.vStart : null, ve = f.vEnd ? +f.vEnd : null;
+      if (vs && ve && (!ce || ce === c) && ve < vs) return this.flash('Ending verse is before the starting verse');
+      const before = this.streak, hadToday = this.readToday;
+      this.db.readings.push({ id: uid(), userId: this.user.id, date: f.date || localDate(), book: f.book, chapter: c, chapterEnd: ce, vStart: vs, vEnd: ve, notes: f.notes.trim(), tags: this.parseTags(f.tags), isPublic: f.isPublic, createdAt: Date.now() });
+      this.persist();
+      const after = this.streak;
+      if (after > before && MILESTONES.includes(after)) { this.celebrate(true); this.flash(`🔥 ${after}-day streak! Well done.`); }
+      else if (!hadToday && this.readToday) { this.celebrate(false); this.flash(after > 1 ? `Streak: ${after} days 🔥` : 'Reading logged · streak started!'); }
+      else this.flash('Reading logged');
+      this.rForm = { ...f, chapter: (ce || c) < max ? (ce || c) + 1 : c, chapterEnd: '', vStart: '', vEnd: '', notes: '', tags: '', date: localDate() };
+    },
+    toggleReadingPublic(r) { r.isPublic = !r.isPublic; this.persist(); },
+    deleteReading(r) { if (!confirm('Delete this reading entry?')) return; this.db.readings = this.db.readings.filter(x => x.id !== r.id); this.persist(); },
+    celebrate(big) { if (window.confetti) confetti({ particleCount: big ? 160 : 70, spread: big ? 100 : 60, origin: { y: 0.75 }, colors: ['#f59e0b', '#d97706', '#fde68a', '#a8a29e'] }); },
+
+    /* ---------- groups ---------- */
+    get myGroups() { return this.user ? this.db.groups.filter(g => g.members.some(m => m.userId === this.user.id)) : []; },
+    get shareableGroups() { return this.myGroups.filter(g => this.can(g, 'share')); },
+    get activeGroup() { return this.myGroups.find(g => g.id === this.activeGroupId) || null; },
+    get groupMessages() { return this.db.messages.filter(m => m.groupId === this.activeGroupId).sort((a, b) => a.ts - b.ts); },
+    myRole(g) { return g.members.find(m => m.userId === this.user.id)?.role; },
+    can(g, action) {
+      const r = this.myRole(g); if (!r) return false; if (r === 'owner') return true;
+      if (action === 'edit' || action === 'remove') return r === 'admin';
+      if (action === 'invite') return r === 'admin' || g.settings.membersCanInvite;
+      if (action === 'share') return r === 'admin' || g.settings.membersCanShare;
+      return false; // 'settings', 'manageRoles', 'delete' are owner-only
+    },
+    canRemove(g, m) {
+      if (m.userId === this.user.id || m.role === 'owner') return false;
+      const r = this.myRole(g); return r === 'owner' || (r === 'admin' && m.role === 'member');
+    },
+    lastMessage(g) { const ms = this.db.messages.filter(m => m.groupId === g.id); return ms.sort((a, b) => b.ts - a.ts)[0]; },
+    preview(m) { if (!m) return 'No messages yet'; if (m.type === 'prayer') return `${this.userName(m.userId)} shared a prayer`; if (m.type === 'system') return m.text; return `${this.userName(m.userId)}: ${m.text}`; },
+    post(groupId, msg) { this.db.messages.push({ id: uid(), groupId, userId: this.user.id, ts: Date.now(), ...msg }); },
+    createGroup() {
+      const name = this.gForm.name.trim(); if (!name) return;
+      const g = { id: uid(), name, description: this.gForm.description.trim(), ownerId: this.user.id, members: [{ userId: this.user.id, role: 'owner', joinedAt: Date.now() }], settings: { membersCanInvite: false, membersCanShare: true }, createdAt: Date.now() };
+      this.db.groups.push(g); this.post(g.id, { type: 'system', text: `${this.user.name} created the group` });
+      this.persist(); this.gForm = { name: '', description: '' }; this.openGroup(g.id);
+    },
+    openGroup(id) { this.activeGroupId = id; this.groupView = 'chat'; const g = this.activeGroup; this.gEdit = { name: g.name, description: g.description }; this.$nextTick(() => this.scrollChat()); },
+    scrollChat() { const el = document.getElementById('chatBox'); if (el) el.scrollTop = el.scrollHeight; },
+    sendMessage() {
+      const text = this.chatText.trim(); if (!text || !this.activeGroup) return;
+      this.post(this.activeGroupId, { type: 'text', text }); this.persist(); this.chatText = '';
+      this.$nextTick(() => this.scrollChat());
+    },
+    sharePrayer(p, groupId) {
+      const g = this.myGroups.find(x => x.id === groupId); if (!g) return;
+      if (!this.can(g, 'share')) return this.flash('Sharing is turned off in that group');
+      this.post(g.id, { type: 'prayer', prayer: { text: p.text, tags: [...p.tags] }, praying: [] });
+      this.persist(); this.flash(`Shared to ${g.name}`);
+    },
+    togglePraying(m) {
+      m.praying ??= []; const i = m.praying.indexOf(this.user.id);
+      i >= 0 ? m.praying.splice(i, 1) : m.praying.push(this.user.id); this.persist();
+    },
+    invite(g) {
+      const e = this.inviteEmail.trim().toLowerCase(); if (!e) return;
+      const u = this.db.users.find(x => x.email === e);
+      if (!u) return this.flash('No account with that email yet. They need to sign up first.');
+      if (g.members.some(m => m.userId === u.id)) return this.flash(`${u.name} is already in this group`);
+      g.members.push({ userId: u.id, role: 'member', joinedAt: Date.now() });
+      this.post(g.id, { type: 'system', text: `${this.user.name} added ${u.name}` });
+      this.persist(); this.inviteEmail = ''; this.flash(`${u.name} added`);
+    },
+    setRole(g, userId, role, el) {
+      if (!this.can(g, 'manageRoles')) return;
+      const m = g.members.find(x => x.userId === userId); if (!m) return;
+      if (role === 'owner') {
+        if (!confirm(`Transfer ownership to ${this.userName(userId)}? You will become an admin.`)) { el.value = m.role; return; }
+        g.members.find(x => x.userId === this.user.id).role = 'admin'; m.role = 'owner'; g.ownerId = userId;
+        this.post(g.id, { type: 'system', text: `${this.user.name} made ${this.userName(userId)} the owner` });
+      } else {
+        m.role = role; this.post(g.id, { type: 'system', text: `${this.userName(userId)} is now ${role === 'admin' ? 'an admin' : 'a member'}` });
+      }
+      this.persist();
+    },
+    removeMember(g, userId) {
+      if (!confirm(`Remove ${this.userName(userId)} from ${g.name}?`)) return;
+      g.members = g.members.filter(m => m.userId !== userId);
+      this.post(g.id, { type: 'system', text: `${this.user.name} removed ${this.userName(userId)}` }); this.persist();
+    },
+    saveGroupDetails(g) {
+      if (!this.can(g, 'edit') || !this.gEdit.name.trim()) return;
+      g.name = this.gEdit.name.trim(); g.description = this.gEdit.description.trim(); this.persist(); this.flash('Group updated');
+    },
+    toggleSetting(g, key) { if (!this.can(g, 'settings')) return; g.settings[key] = !g.settings[key]; this.persist(); },
+    leaveGroup(g) {
+      if (this.myRole(g) === 'owner') return this.flash('Transfer ownership before leaving');
+      if (!confirm(`Leave ${g.name}?`)) return;
+      g.members = g.members.filter(m => m.userId !== this.user.id);
+      this.post(g.id, { type: 'system', text: `${this.user.name} left the group` }); this.persist(); this.activeGroupId = null;
+    },
+    deleteGroup(g) {
+      if (!this.can(g, 'delete') || !confirm(`Delete ${g.name} and all its messages? This can't be undone.`)) return;
+      this.db.groups = this.db.groups.filter(x => x.id !== g.id); this.db.messages = this.db.messages.filter(m => m.groupId !== g.id);
+      this.persist(); this.activeGroupId = null; this.flash('Group deleted');
+    },
+
+    /* ---------- community ---------- */
+    get publicFeed() {
+      return [
+        ...this.db.prayers.filter(p => p.isPublic).map(p => ({ ...p, kind: 'prayer' })),
+        ...this.db.readings.filter(r => r.isPublic).map(r => ({ ...r, kind: 'reading' }))
+      ].sort((a, b) => b.createdAt - a.createdAt);
+    }
+  };
+}
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+</head>
+<body class="bg-stone-50 text-stone-800 font-sans antialiased min-h-screen" x-data="app()" x-cloak>
+
+<!-- Toast -->
+<div x-show="toast" x-transition.opacity class="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-stone-900 text-white text-sm px-4 py-2 rounded-full shadow-lg max-w-[90vw] text-center" x-text="toast"></div>
+
+<!-- ================= AUTH ================= -->
+<template x-if="!user">
+<section class="min-h-screen flex items-center justify-center p-4 bg-gradient-to-b from-amber-50 to-stone-50">
+  <div class="w-full max-w-sm">
+    <div class="text-center mb-8">
+      <div class="text-5xl mb-3">🕊️</div>
+      <h1 class="font-serif text-4xl font-semibold text-stone-900">Abide</h1>
+      <p class="text-stone-500 mt-2">Your daily prayer &amp; Bible reading journal</p>
+    </div>
+    <div class="card p-6">
+      <div class="flex bg-stone-100 rounded-lg p-1 mb-5">
+        <button type="button" @click="authMode='login';authError=''" :class="authMode==='login'?'bg-white shadow-sm text-stone-900':'text-stone-500'" class="flex-1 py-1.5 rounded-md text-sm font-medium transition">Log in</button>
+        <button type="button" @click="authMode='signup';authError=''" :class="authMode==='signup'?'bg-white shadow-sm text-stone-900':'text-stone-500'" class="flex-1 py-1.5 rounded-md text-sm font-medium transition">Sign up</button>
+      </div>
+      <form @submit.prevent="authMode==='login' ? login() : signup()" class="space-y-3">
+        <div x-show="authMode==='signup'"><label class="label">Display name</label><input x-model="authForm.name" class="input" autocomplete="name" placeholder="Your name"></div>
+        <div><label class="label">Email</label><input x-model="authForm.email" type="email" class="input" autocomplete="email" placeholder="you@example.com" required></div>
+        <div><label class="label">Password</label><input x-model="authForm.password" type="password" class="input" :autocomplete="authMode==='login'?'current-password':'new-password'" placeholder="At least 6 characters" required></div>
+        <p x-show="authError" class="text-sm text-red-600" x-text="authError"></p>
+        <button class="btn w-full" :disabled="busy" x-text="authMode==='login' ? 'Log in' : 'Create account'"></button>
+      </form>
+    </div>
+    <div class="mt-4 text-center text-xs text-stone-500 space-y-2">
+      <p>Prototype: accounts and data are stored only in this browser.</p>
+      <button class="underline hover:text-stone-800" @click="seedDemo()">Create two demo accounts for testing groups</button>
+    </div>
+  </div>
+</section>
+</template>
+
+<!-- ================= APP ================= -->
+<template x-if="user">
+<div>
+  <header class="sticky top-0 z-30 bg-white/90 backdrop-blur border-b border-stone-200">
+    <div class="max-w-3xl mx-auto px-4 h-14 flex items-center gap-4">
+      <button class="flex items-center gap-2" @click="go('prayers')"><span class="text-xl">🕊️</span><span class="font-serif text-xl font-semibold text-stone-900">Abide</span></button>
+      <nav class="hidden md:flex gap-1 ml-4">
+        <template x-for="t in tabs" :key="t.id">
+          <button @click="go(t.id)" class="px-3 py-1.5 rounded-lg text-sm font-medium transition" :class="tab===t.id?'bg-amber-50 text-amber-800':'text-stone-500 hover:text-stone-800'" x-text="t.label"></button>
+        </template>
+      </nav>
+      <div class="ml-auto flex items-center gap-3">
+        <span class="hidden sm:inline-flex items-center gap-1 text-sm font-semibold" :class="streak?'text-amber-600':'text-stone-300'" title="Reading streak"><span x-text="streak"></span>🔥</span>
+        <div class="relative" x-data="{open:false}">
+          <button @click="open=!open" class="avatar hover:ring-2 hover:ring-amber-300" x-text="initials(user.id)"></button>
+          <div x-show="open" @click.outside="open=false" x-transition class="absolute right-0 mt-2 w-60 card p-2 text-sm">
+            <div class="px-2 py-1.5 border-b border-stone-100 mb-1"><div class="font-medium" x-text="user.name"></div><div class="text-xs text-stone-400 truncate" x-text="user.email"></div></div>
+            <button class="w-full text-left px-2 py-1.5 rounded hover:bg-stone-100" @click="exportData();open=false">Export my data (JSON)</button>
+            <button class="w-full text-left px-2 py-1.5 rounded hover:bg-stone-100 text-red-600" @click="logout()">Log out</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-3xl mx-auto px-4 pt-6 pb-28 md:pb-12">
+
+    <!-- ---------- PRAYERS ---------- -->
+    <section x-show="tab==='prayers'">
+      <h2 class="section-title mb-4">Prayer log</h2>
+      <form @submit.prevent="addPrayer()" class="card p-4 space-y-3">
+        <textarea x-model="pForm.text" rows="4" class="input resize-y font-serif text-base" placeholder="Write your prayer…"></textarea>
+        <div class="grid sm:grid-cols-[1fr_auto] gap-3">
+          <div><label class="label">Tags (comma separated, e.g. family, Mom, exams)</label><input x-model="pForm.tags" class="input" placeholder="family, healing"></div>
+          <div><label class="label">Date</label><input type="date" x-model="pForm.date" class="input"></div>
+        </div>
+        <div class="flex items-center justify-between gap-3">
+          <label class="flex items-center gap-2 text-sm text-stone-600"><input type="checkbox" x-model="pForm.isPublic" class="rounded accent-amber-600"> Share publicly in Community</label>
+          <button class="btn" :disabled="!pForm.text.trim()">Save prayer</button>
+        </div>
+      </form>
+
+      <div class="mt-6 flex flex-col sm:flex-row gap-3 sm:items-center">
+        <input x-model="pSearch" class="input sm:max-w-xs" placeholder="Search prayers…">
+        <div class="flex flex-wrap gap-1.5">
+          <button class="chip" :class="!pFilter ? '!bg-amber-600 !text-white !ring-amber-600' : ''" @click="pFilter=''">All</button>
+          <template x-for="t in prayerTags" :key="t"><button class="chip" :class="pFilter===t ? '!bg-amber-600 !text-white !ring-amber-600' : ''" @click="pFilter = pFilter===t ? '' : t" x-text="'#'+t"></button></template>
+        </div>
+      </div>
+
+      <p x-show="!prayersByDate.length" class="text-center text-stone-400 py-12" x-text="myPrayers.length ? 'No prayers match that filter.' : 'Your saved prayers will appear here, organized by date.'"></p>
+      <template x-for="g in prayersByDate" :key="g.date">
+        <div>
+          <h3 class="date-head" x-text="fmtDate(g.date)"></h3>
+          <div class="space-y-3">
+            <template x-for="p in g.items" :key="p.id">
+              <article class="card p-4">
+                <p class="whitespace-pre-wrap font-serif leading-relaxed" :class="p.answered && 'text-stone-500'" x-text="p.text"></p>
+                <div class="flex flex-wrap gap-1.5 mt-3">
+                  <template x-for="t in p.tags" :key="t"><button class="chip" @click="pFilter=t" x-text="'#'+t"></button></template>
+                  <span x-show="p.answered" class="chip !bg-emerald-50 !text-emerald-700 !ring-emerald-200">✓ Answered</span>
+                  <span x-show="p.isPublic" class="chip !bg-sky-50 !text-sky-700 !ring-sky-200">Public</span>
+                </div>
+                <div class="flex flex-wrap items-center gap-1 mt-3 pt-3 border-t border-stone-100">
+                  <button class="btn-ghost" @click="toggleAnswered(p)" x-text="p.answered ? 'Mark unanswered' : 'Mark answered'"></button>
+                  <button class="btn-ghost" @click="togglePublic(p)" x-text="p.isPublic ? 'Make private' : 'Make public'"></button>
+                  <select x-show="shareableGroups.length" class="btn-ghost bg-transparent cursor-pointer" @change="if($event.target.value) sharePrayer(p, $event.target.value); $event.target.value=''">
+                    <option value="">Share to group…</option>
+                    <template x-for="gr in shareableGroups" :key="gr.id"><option :value="gr.id" x-text="gr.name"></option></template>
+                  </select>
+                  <button class="btn-ghost ml-auto hover:!text-red-600" @click="deletePrayer(p)">Delete</button>
+                </div>
+              </article>
+            </template>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ---------- BIBLE READING ---------- -->
+    <section x-show="tab==='reading'">
+      <h2 class="section-title mb-4">Bible reading</h2>
+      <div class="grid grid-cols-3 gap-3">
+        <div class="card p-4 text-center"><div class="text-3xl font-bold" :class="streak?'text-amber-600':'text-stone-300'"><span x-text="streak"></span><span class="text-2xl">🔥</span></div><div class="text-xs text-stone-500 mt-1">Current streak</div></div>
+        <div class="card p-4 text-center"><div class="text-3xl font-bold text-stone-800" x-text="longestStreak"></div><div class="text-xs text-stone-500 mt-1">Longest streak</div></div>
+        <div class="card p-4 text-center"><div class="text-3xl font-bold text-stone-800" x-text="readDays.size"></div><div class="text-xs text-stone-500 mt-1">Days read</div></div>
+      </div>
+      <div class="card p-4 mt-3">
+        <div class="flex items-center justify-between mb-3 gap-2">
+          <p class="text-sm" :class="readToday?'text-emerald-700':'text-stone-600'" x-text="(readToday?'✓ ':'')+streakMessage"></p>
+          <span class="text-xs text-stone-400 shrink-0">Last 12 weeks</span>
+        </div>
+        <div class="overflow-x-auto">
+          <div class="grid grid-flow-col gap-1 w-max" style="grid-template-rows:repeat(7,minmax(0,1fr))">
+            <template x-for="d in heatmap" :key="d.date">
+              <div class="w-3.5 h-3.5 rounded-sm" :class="d.count===0 ? 'bg-stone-100' : (d.count===1 ? 'bg-amber-300' : 'bg-amber-500')" :title="fmtDate(d.date) + (d.count ? ' · ' + d.count + ' reading(s)' : '')"></div>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <form @submit.prevent="addReading()" class="card p-4 mt-6 space-y-3">
+        <h3 class="font-semibold text-stone-900">Log a reading</h3>
+        <div class="grid grid-cols-2 sm:grid-cols-6 gap-3">
+          <div class="col-span-2 sm:col-span-3"><label class="label">Book</label>
+            <select x-model="rForm.book" class="input">
+              <optgroup label="Old Testament"><template x-for="b in books.slice(0,39)" :key="b.name"><option :value="b.name" x-text="b.name" :selected="b.name===rForm.book"></option></template></optgroup>
+              <optgroup label="New Testament"><template x-for="b in books.slice(39)" :key="b.name"><option :value="b.name" x-text="b.name" :selected="b.name===rForm.book"></option></template></optgroup>
+            </select>
+          </div>
+          <div class="col-span-2 sm:col-span-3"><label class="label">Date</label><input type="date" x-model="rForm.date" class="input"></div>
+          <div class="sm:col-span-2"><label class="label" x-text="'Chapter (1–'+bookChapters(rForm.book)+')'"></label><input type="number" min="1" :max="bookChapters(rForm.book)" x-model="rForm.chapter" class="input" required></div>
+          <div class="sm:col-span-1"><label class="label">To ch.</label><input type="number" min="1" :max="bookChapters(rForm.book)" x-model="rForm.chapterEnd" class="input" placeholder="—"></div>
+          <div class="sm:col-span-2"><label class="label">Verse from</label><input type="number" min="1" x-model="rForm.vStart" class="input" placeholder="optional"></div>
+          <div class="sm:col-span-1"><label class="label">to</label><input type="number" min="1" x-model="rForm.vEnd" class="input" placeholder="—"></div>
+        </div>
+        <p class="text-sm text-stone-500">Reference: <span class="font-serif font-semibold text-stone-900" x-text="refOf(rForm)"></span></p>
+        <div><label class="label">Notes / reflection</label><textarea x-model="rForm.notes" rows="2" class="input resize-y" placeholder="What stood out to you?"></textarea></div>
+        <div><label class="label">Tags</label><input x-model="rForm.tags" class="input" placeholder="gospels, morning, study plan"></div>
+        <div class="flex items-center justify-between gap-3">
+          <label class="flex items-center gap-2 text-sm text-stone-600"><input type="checkbox" x-model="rForm.isPublic" class="rounded accent-amber-600"> Share publicly</label>
+          <button class="btn">Log reading</button>
+        </div>
+      </form>
+
+      <div class="mt-6 flex flex-wrap gap-1.5" x-show="readingTags.length">
+        <button class="chip" :class="!rFilter ? '!bg-amber-600 !text-white !ring-amber-600' : ''" @click="rFilter=''">All</button>
+        <template x-for="t in readingTags" :key="t"><button class="chip" :class="rFilter===t ? '!bg-amber-600 !text-white !ring-amber-600' : ''" @click="rFilter = rFilter===t ? '' : t" x-text="'#'+t"></button></template>
+      </div>
+      <p x-show="!readingsByDate.length" class="text-center text-stone-400 py-12">Your reading history will appear here.</p>
+      <template x-for="g in readingsByDate" :key="g.date">
+        <div>
+          <h3 class="date-head" x-text="fmtDate(g.date)"></h3>
+          <div class="space-y-3">
+            <template x-for="r in g.items" :key="r.id">
+              <article class="card p-4">
+                <div class="flex items-start justify-between gap-3">
+                  <h4 class="font-serif text-lg font-semibold text-stone-900" x-text="refOf(r)"></h4>
+                  <a :href="passageUrl(r)" target="_blank" rel="noopener" class="btn-ghost shrink-0">Read ↗</a>
+                </div>
+                <p x-show="r.notes" class="mt-1 text-sm text-stone-600 whitespace-pre-wrap" x-text="r.notes"></p>
+                <div class="flex flex-wrap gap-1.5 mt-3" x-show="r.tags.length || r.isPublic">
+                  <template x-for="t in r.tags" :key="t"><button class="chip" @click="rFilter=t" x-text="'#'+t"></button></template>
+                  <span x-show="r.isPublic" class="chip !bg-sky-50 !text-sky-700 !ring-sky-200">Public</span>
+                </div>
+                <div class="flex gap-1 mt-3 pt-3 border-t border-stone-100">
+                  <button class="btn-ghost" @click="toggleReadingPublic(r)" x-text="r.isPublic ? 'Make private' : 'Make public'"></button>
+                  <button class="btn-ghost ml-auto hover:!text-red-600" @click="deleteReading(r)">Delete</button>
+                </div>
+              </article>
+            </template>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ---------- GROUPS ---------- -->
+    <section x-show="tab==='groups'">
+      <!-- list -->
+      <div x-show="!activeGroup">
+        <h2 class="section-title mb-4">Prayer groups</h2>
+        <form @submit.prevent="createGroup()" class="card p-4 space-y-3">
+          <h3 class="font-semibold text-stone-900">Create a group</h3>
+          <input x-model="gForm.name" class="input" placeholder="Group name, e.g. Tuesday Small Group">
+          <input x-model="gForm.description" class="input" placeholder="Description (optional)">
+          <div class="flex justify-end"><button class="btn" :disabled="!gForm.name.trim()">Create group</button></div>
+        </form>
+        <p x-show="!myGroups.length" class="text-center text-stone-400 py-12">You're not in any groups yet.</p>
+        <div class="mt-6 space-y-3">
+          <template x-for="g in myGroups" :key="g.id">
+            <button @click="openGroup(g.id)" class="card p-4 w-full text-left hover:border-amber-300 transition flex items-center gap-3">
+              <div class="h-11 w-11 shrink-0 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-serif text-lg font-semibold" x-text="g.name[0].toUpperCase()"></div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2"><span class="font-semibold truncate" x-text="g.name"></span><span class="chip capitalize !text-[10px]" x-text="myRole(g)"></span></div>
+                <div class="text-xs text-stone-500 truncate mt-0.5" x-text="preview(lastMessage(g))"></div>
+              </div>
+              <span class="text-xs text-stone-400 shrink-0" x-text="g.members.length + (g.members.length===1?' member':' members')"></span>
+            </button>
+          </template>
+        </div>
+      </div>
+
+      <!-- detail -->
+      <template x-if="activeGroup">
+        <div>
+          <div class="flex items-center gap-3 mb-4">
+            <button class="btn-ghost !text-sm" @click="activeGroupId=null">← Groups</button>
+            <div class="min-w-0"><h2 class="font-serif text-xl font-semibold truncate" x-text="activeGroup.name"></h2><p class="text-xs text-stone-500 truncate" x-text="activeGroup.description || (activeGroup.members.length + ' members')"></p></div>
+          </div>
+          <div class="flex bg-stone-100 rounded-lg p-1 mb-4">
+            <template x-for="v in ['chat','members','settings']" :key="v">
+              <button @click="groupView=v; if(v==='chat') $nextTick(()=>scrollChat())" class="flex-1 py-1.5 rounded-md text-sm font-medium capitalize transition" :class="groupView===v?'bg-white shadow-sm text-stone-900':'text-stone-500'" x-text="v"></button>
+            </template>
+          </div>
+
+          <!-- chat -->
+          <div x-show="groupView==='chat'" class="card overflow-hidden">
+            <div id="chatBox" class="h-[55vh] overflow-y-auto p-4 space-y-3 bg-stone-50/50">
+              <template x-for="m in groupMessages" :key="m.id">
+                <div>
+                  <p x-show="m.type==='system'" class="text-center text-[11px] text-stone-400" x-text="m.text"></p>
+                  <div x-show="m.type!=='system'" class="flex" :class="m.userId===user.id ? 'justify-end' : 'justify-start'">
+                    <div class="max-w-[85%]">
+                      <div class="text-[11px] text-stone-400 mb-0.5" :class="m.userId===user.id && 'text-right'" x-text="(m.userId===user.id ? 'You' : userName(m.userId)) + ' · ' + fmtTime(m.ts)"></div>
+                      <div x-show="m.type==='text'" class="rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap break-words" :class="m.userId===user.id ? 'bg-amber-600 text-white rounded-br-sm' : 'bg-white border border-stone-200 rounded-bl-sm'" x-text="m.text"></div>
+                      <div x-show="m.type==='prayer'" class="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm">
+                        <div class="text-[11px] font-semibold uppercase tracking-wide text-amber-700 mb-1">🙏 Prayer request</div>
+                        <p class="whitespace-pre-wrap font-serif" x-text="m.prayer?.text"></p>
+                        <div class="flex gap-1 mt-2 flex-wrap"><template x-for="t in (m.prayer?.tags || [])" :key="t"><span class="chip" x-text="'#'+t"></span></template></div>
+                        <button class="btn-ghost mt-2 !px-2" :class="(m.praying||[]).includes(user.id) && '!bg-amber-200 !text-amber-900'" @click="togglePraying(m)" x-text="'🙏 Praying' + ((m.praying||[]).length ? ' · ' + m.praying.length : '')"></button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+            <form @submit.prevent="sendMessage()" class="flex gap-2 p-3 border-t border-stone-200 bg-white">
+              <input x-model="chatText" class="input" placeholder="Message the group…">
+              <button class="btn" :disabled="!chatText.trim()">Send</button>
+            </form>
+          </div>
+
+          <!-- members -->
+          <div x-show="groupView==='members'" class="card p-4">
+            <form x-show="can(activeGroup,'invite')" @submit.prevent="invite(activeGroup)" class="flex gap-2 mb-2">
+              <input x-model="inviteEmail" type="email" class="input" placeholder="Add a member by email">
+              <button class="btn">Add</button>
+            </form>
+            <p x-show="!can(activeGroup,'invite')" class="text-xs text-stone-400 mb-2">Only admins can add members in this group.</p>
+            <ul class="divide-y divide-stone-100">
+              <template x-for="m in activeGroup.members" :key="m.userId">
+                <li class="flex items-center gap-3 py-3">
+                  <span class="avatar" x-text="initials(m.userId)"></span>
+                  <div class="flex-1 min-w-0"><div class="font-medium text-sm truncate" x-text="userName(m.userId) + (m.userId===user.id ? ' (you)' : '')"></div><div class="text-xs text-stone-400 truncate" x-text="userEmail(m.userId)"></div></div>
+                  <template x-if="can(activeGroup,'manageRoles') && m.role!=='owner'">
+                    <select class="input !w-auto !py-1 !text-xs" @change="setRole(activeGroup, m.userId, $event.target.value, $event.target)">
+                      <option value="member" :selected="m.role==='member'">Member</option>
+                      <option value="admin" :selected="m.role==='admin'">Admin</option>
+                      <option value="owner">Make owner…</option>
+                    </select>
+                  </template>
+                  <template x-if="!(can(activeGroup,'manageRoles') && m.role!=='owner')"><span class="chip capitalize" x-text="m.role"></span></template>
+                  <button x-show="canRemove(activeGroup,m)" class="btn-ghost hover:!text-red-600" @click="removeMember(activeGroup, m.userId)">Remove</button>
+                </li>
+              </template>
+            </ul>
+            <div class="mt-3 pt-3 border-t border-stone-100 text-xs text-stone-500 space-y-1">
+              <p><b>Owner</b>: all settings, roles, delete group. <b>Admin</b>: edit details, add &amp; remove members. <b>Member</b>: chat and share prayers.</p>
+            </div>
+          </div>
+
+          <!-- settings -->
+          <div x-show="groupView==='settings'" class="space-y-4">
+            <form x-show="can(activeGroup,'edit')" @submit.prevent="saveGroupDetails(activeGroup)" class="card p-4 space-y-3">
+              <h3 class="font-semibold">Group details</h3>
+              <div><label class="label">Name</label><input x-model="gEdit.name" class="input"></div>
+              <div><label class="label">Description</label><input x-model="gEdit.description" class="input"></div>
+              <div class="flex justify-end"><button class="btn">Save</button></div>
+            </form>
+            <div class="card p-4 space-y-3">
+              <h3 class="font-semibold">Member permissions</h3>
+              <p x-show="!can(activeGroup,'settings')" class="text-xs text-stone-400">Only the owner can change these.</p>
+              <template x-for="s in [{k:'membersCanInvite',l:'Members can add people'},{k:'membersCanShare',l:'Members can share prayers'}]" :key="s.k">
+                <label class="flex items-center justify-between gap-3 text-sm">
+                  <span x-text="s.l"></span>
+                  <button type="button" @click="toggleSetting(activeGroup, s.k)" :disabled="!can(activeGroup,'settings')" class="relative h-6 w-11 rounded-full transition disabled:opacity-50" :class="activeGroup.settings[s.k] ? 'bg-amber-600' : 'bg-stone-300'">
+                    <span class="absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all" :class="activeGroup.settings[s.k] ? 'left-[22px]' : 'left-0.5'"></span>
+                  </button>
+                </label>
+              </template>
+            </div>
+            <div class="card p-4 flex flex-wrap gap-3 justify-between items-center">
+              <span class="text-sm text-stone-500" x-text="'Your role: ' + myRole(activeGroup)"></span>
+              <div class="flex gap-2">
+                <button x-show="myRole(activeGroup)!=='owner'" class="btn-outline" @click="leaveGroup(activeGroup)">Leave group</button>
+                <button x-show="can(activeGroup,'delete')" class="btn !bg-red-600 hover:!bg-red-700" @click="deleteGroup(activeGroup)">Delete group</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ---------- COMMUNITY ---------- -->
+    <section x-show="tab==='community'">
+      <h2 class="section-title mb-1">Community</h2>
+      <p class="text-sm text-stone-500 mb-4">Only prayers and readings people choose to make public appear here.</p>
+      <p x-show="!publicFeed.length" class="text-center text-stone-400 py-12">Nothing public yet.</p>
+      <div class="space-y-3">
+        <template x-for="item in publicFeed" :key="item.id">
+          <article class="card p-4">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="avatar !h-7 !w-7" x-text="initials(item.userId)"></span>
+              <span class="text-sm font-medium" x-text="userName(item.userId)"></span>
+              <span class="text-xs text-stone-400" x-text="(item.kind==='prayer' ? 'prayed' : 'read') + ' · ' + fmtDate(item.date)"></span>
+            </div>
+            <template x-if="item.kind==='prayer'"><p class="font-serif whitespace-pre-wrap" x-text="item.text"></p></template>
+            <template x-if="item.kind==='reading'">
+              <div><a :href="passageUrl(item)" target="_blank" rel="noopener" class="font-serif text-lg font-semibold hover:text-amber-700" x-text="'📖 ' + refOf(item)"></a><p x-show="item.notes" class="text-sm text-stone-600 mt-1 whitespace-pre-wrap" x-text="item.notes"></p></div>
+            </template>
+            <div class="flex flex-wrap gap-1.5 mt-2"><template x-for="t in item.tags" :key="t"><span class="chip" x-text="'#'+t"></span></template></div>
+          </article>
+        </template>
+      </div>
+    </section>
+  </main>
+
+  <!-- mobile bottom nav -->
+  <nav class="md:hidden fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur border-t border-stone-200 grid grid-cols-4 z-30" style="padding-bottom:env(safe-area-inset-bottom)">
+    <template x-for="t in tabs" :key="t.id">
+      <button @click="go(t.id)" class="py-2 flex flex-col items-center gap-0.5 text-[11px] font-medium" :class="tab===t.id ? 'text-amber-700' : 'text-stone-400'"><span class="text-lg leading-none" x-text="t.icon"></span><span x-text="t.label"></span></button>
+    </template>
+  </nav>
+</div>
+</template>
+</body>
+</html>
