@@ -36,13 +36,14 @@ The working app is still the single `index.html` in the repo root. The folders b
 │       ├── streaks/      streaks and heatmap
 │       ├── groups/       groups, chat, roles
 │       └── community/    public feed
-├── backend/              server-side code (not built yet)
+├── backend/              notes on the Supabase backend
 │   ├── auth/             real accounts and verification
 │   └── functions/        trusted server actions
-├── database/             shared database (not built yet)
+├── database/             shared database
 │   ├── migrations/       table definitions
 │   ├── policies/         who can see what
-│   └── seeds/            test data
+│   ├── seeds/            test data
+│   └── tests/            security rule tests
 └── docs/                 notes and decisions
 ```
 
@@ -56,14 +57,13 @@ Open `index.html` in a browser. That's it.
 2. Repo → **Settings → Pages** → Source: *Deploy from a branch* → `main` / `(root)` → Save.
 3. Your app will be live at `https://<username>.github.io/<repo>/`.
 
-## Prototype limits (important)
-Data is stored in the browser's `localStorage`, so it lives **only on that device/browser**. Groups only work between accounts on the same browser. This is not real privacy or security — anyone with access to the browser can read the data.
+## Backend
+The login system uses [Supabase](https://supabase.com), and it switches on once `frontend/services/supabase-config.js` is filled in. Follow [docs/backend-setup.md](docs/backend-setup.md). Until then, the app uses browser-only prototype accounts.
 
-## Next step: real backend
-GitHub Pages only hosts static files, so pair it with a free hosted backend. Recommended: **Supabase** (free tier):
-- Supabase Auth → real email sign-up and verification
-- Postgres tables: `profiles, prayers, readings, groups, group_members, messages`
-- **Row Level Security** → enforces "only you can see your posts unless public" at the database level
-- Realtime → live group chat
+The database tables and security rules cover every feature, but only accounts are connected so far.
 
-All data access in `index.html` already goes through the user-filtered getters and the `store` object, so swapping in Supabase means replacing those calls rather than rewriting the UI.
+## Current limits (important)
+Prayers, readings, groups and community posts are still stored in the browser's `localStorage`, so they live **only on that device/browser**. Groups only work between accounts on the same browser. This is not real privacy or security: anyone with access to the browser can read the data.
+
+## Next step
+Connect each feature to the database by replacing the `store` and `persist()` calls in `index.html` with Supabase queries. The tables are `profiles, prayers, readings, groups, group_members, messages, message_praying`, and group membership and role changes go through the functions in `database/policies`.

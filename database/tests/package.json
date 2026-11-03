@@ -1,0 +1,11 @@
+{
+  "name": "one-day-closer-database-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node security.test.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.2.17"
+  }
+}

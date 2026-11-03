@@ -1,3 +1,3 @@
 # Auth
 
-Real account handling: email sign-up, verification and password resets. Replaces the browser-only accounts in the prototype.
+Accounts are handled by Supabase Auth. The app's side of it is `frontend/services/auth.js`, and setup is in `docs/backend-setup.md`. Add server-side auth code here only if Supabase's built-in features stop being enough.

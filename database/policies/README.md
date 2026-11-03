@@ -1,3 +1,3 @@
 # Policies
 
-Row Level Security rules, which enforce that only you can see your posts unless they're public.
+Row Level Security rules and group functions, which decide who can see and change each record.

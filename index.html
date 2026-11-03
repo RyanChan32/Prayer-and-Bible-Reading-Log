@@ -24,6 +24,9 @@
   .date-head{@apply text-xs font-semibold uppercase tracking-wide text-stone-400 mb-2 mt-6}
 </style>
 <script defer src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="frontend/services/supabase-config.js"></script>
+<script src="frontend/services/auth.js"></script>
 <script>
 /* ============================================================
    One Day Closer — prototype
@@ -33,6 +36,7 @@
    ============================================================ */
 const DB_KEY = 'abide_db_v1';
 const SESSION_KEY = 'abide_session';
+const auth = window.authService; // null = browser-only prototype accounts
 
 const BOOKS = ('Genesis:50|Exodus:40|Leviticus:27|Numbers:36|Deuteronomy:34|Joshua:24|Judges:21|Ruth:4|1 Samuel:31|2 Samuel:24|1 Kings:22|2 Kings:25|1 Chronicles:29|2 Chronicles:36|Ezra:10|Nehemiah:13|Esther:10|Job:42|Psalms:150|Proverbs:31|Ecclesiastes:12|Song of Solomon:8|Isaiah:66|Jeremiah:52|Lamentations:5|Ezekiel:48|Daniel:12|Hosea:14|Joel:3|Amos:9|Obadiah:1|Jonah:4|Micah:7|Nahum:3|Habakkuk:3|Zephaniah:3|Haggai:2|Zechariah:14|Malachi:4|'
   + 'Matthew:28|Mark:16|Luke:24|John:21|Acts:28|Romans:16|1 Corinthians:16|2 Corinthians:13|Galatians:6|Ephesians:6|Philippians:4|Colossians:4|1 Thessalonians:5|2 Thessalonians:3|1 Timothy:6|2 Timothy:4|Titus:3|Philemon:1|Hebrews:13|James:5|1 Peter:5|2 Peter:3|1 John:5|2 John:1|3 John:1|Jude:1|Revelation:22')
@@ -75,14 +79,17 @@ function app() {
     ],
     books: BOOKS,
     toast: '',
-    authMode: 'login', authForm: { name: '', email: '', password: '' }, authError: '', busy: false,
+    authMode: auth?.recoveryLink ? 'reset' : 'login', authForm: { name: '', email: '', password: '' }, authError: '', authNotice: '', busy: false, serverAccounts: !!auth,
     pForm: { text: '', tags: '', isPublic: false, date: localDate() }, pFilter: '', pSearch: '',
     rForm: { date: localDate(), book: 'John', chapter: 1, chapterEnd: '', vStart: '', vEnd: '', notes: '', tags: '', isPublic: false }, rFilter: '',
     gForm: { name: '', description: '' }, activeGroupId: null, groupView: 'chat', chatText: '', inviteEmail: '', gEdit: { name: '', description: '' },
 
     init() {
-      const s = sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY);
-      if (s) this.user = this.db.users.find(u => u.id === s) || null;
+      if (auth) this.watchServerSession();
+      else {
+        const s = sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY);
+        if (s) this.user = this.db.users.find(u => u.id === s) || null;
+      }
       // live sync between tabs (lets you test groups with two accounts in two tabs)
       window.addEventListener('storage', e => {
         if (e.key !== DB_KEY) return;
@@ -96,11 +103,67 @@ function app() {
     go(id) { this.tab = id; window.scrollTo(0, 0); },
 
     /* ---------- auth ---------- */
+    setAuthMode(mode) { this.authMode = mode; this.authError = ''; this.authNotice = ''; },
+    submitAuth() {
+      this.authError = ''; this.authNotice = '';
+      return { login: () => this.login(), signup: () => this.signup(), forgot: () => this.forgotPassword(), reset: () => this.resetPassword() }[this.authMode]();
+    },
+    watchServerSession() {
+      // Deferred because the Supabase client can deadlock if called from inside this callback.
+      auth.onChange((event, session) => {
+        if (event === 'PASSWORD_RECOVERY') this.authMode = 'reset';
+        setTimeout(() => this.applyServerSession(session), 0);
+      });
+    },
+    applyServerSession(session) {
+      if (!session) { this.user = null; this.activeGroupId = null; return; }
+      if (this.authMode === 'reset' || this.user?.id === session.user.id) return;
+      const { id, email, user_metadata } = session.user;
+      // The rest of the app still looks up names in the local db.
+      let u = this.db.users.find(x => x.id === id);
+      if (!u) { u = { id, name: user_metadata?.name || email.split('@')[0], email, createdAt: Date.now() }; this.db.users.push(u); this.persist(); }
+      this.startSession(u);
+    },
+    async serverSignup(name, email, password) {
+      this.busy = true;
+      const { data, error } = await auth.signUp(name, email, password);
+      this.busy = false;
+      if (error) return this.authError = error.message;
+      if (!data.session) { this.setAuthMode('login'); this.authNotice = `Check ${email} for a link to confirm your account, then log in.`; }
+    },
+    async serverLogin(email, password) {
+      this.busy = true;
+      const { error } = await auth.signIn(email, password);
+      this.busy = false;
+      if (!error) return;
+      if (error.code === 'email_not_confirmed') return this.authError = 'Please confirm your email first, using the link we sent you.';
+      this.authError = error.code === 'invalid_credentials' || error.status === 400 ? 'Email or password is incorrect.' : error.message;
+    },
+    async forgotPassword() {
+      const e = this.authForm.email.trim().toLowerCase();
+      this.busy = true;
+      const { error } = await auth.requestPasswordReset(e);
+      this.busy = false;
+      if (error) return this.authError = error.message;
+      this.authNotice = `If there's an account for ${e}, a password reset link is on its way.`;
+    },
+    async resetPassword() {
+      if (this.authForm.password.length < 6) return this.authError = 'Password must be at least 6 characters.';
+      this.busy = true;
+      const { error } = await auth.updatePassword(this.authForm.password);
+      if (error) { this.busy = false; return this.authError = error.message; }
+      const { data } = await auth.getSession();
+      this.busy = false;
+      this.setAuthMode('login');
+      this.applyServerSession(data.session);
+      this.flash('Password updated');
+    },
     async signup() {
       const { name, email, password } = this.authForm; const e = email.trim().toLowerCase();
       if (!name.trim()) return this.authError = 'Please enter a display name.';
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return this.authError = 'Please enter a valid email.';
       if (password.length < 6) return this.authError = 'Password must be at least 6 characters.';
+      if (auth) return this.serverSignup(name.trim(), e, password);
       if (this.db.users.some(u => u.email === e)) return this.authError = 'An account with that email already exists.';
       this.busy = true;
       const salt = uid();
@@ -109,6 +172,7 @@ function app() {
     },
     async login() {
       const e = this.authForm.email.trim().toLowerCase();
+      if (auth) return this.serverLogin(e, this.authForm.password);
       const u = this.db.users.find(x => x.email === e);
       this.busy = true;
       const ok = u && (await hash(u.salt + this.authForm.password)) === u.passHash;
@@ -119,10 +183,10 @@ function app() {
     startSession(u) {
       this.user = u;
       sessionStorage.setItem(SESSION_KEY, u.id); localStorage.setItem(SESSION_KEY, u.id);
-      this.authForm = { name: '', email: '', password: '' }; this.authError = ''; this.tab = 'prayers'; this.activeGroupId = null;
+      this.authForm = { name: '', email: '', password: '' }; this.authError = ''; this.authNotice = ''; this.tab = 'prayers'; this.activeGroupId = null;
       this.flash(`Welcome, ${u.name.split(' ')[0]}!`);
     },
-    logout() { sessionStorage.removeItem(SESSION_KEY); localStorage.removeItem(SESSION_KEY); this.user = null; this.activeGroupId = null; },
+    logout() { if (auth) auth.signOut(); sessionStorage.removeItem(SESSION_KEY); localStorage.removeItem(SESSION_KEY); this.user = null; this.activeGroupId = null; },
     async seedDemo() {
       for (const [n, e] of [['Grace Lee', 'grace@demo.app'], ['John Park', 'john@demo.app']]) {
         if (!this.db.users.some(u => u.email === e)) {
@@ -342,21 +406,29 @@ function app() {
       <p class="text-stone-500 mt-2">Your daily prayer &amp; Bible reading journal</p>
     </div>
     <div class="card p-6">
-      <div class="flex bg-stone-100 rounded-lg p-1 mb-5">
-        <button type="button" @click="authMode='login';authError=''" :class="authMode==='login'?'bg-white shadow-sm text-stone-900':'text-stone-500'" class="flex-1 py-1.5 rounded-md text-sm font-medium transition">Log in</button>
-        <button type="button" @click="authMode='signup';authError=''" :class="authMode==='signup'?'bg-white shadow-sm text-stone-900':'text-stone-500'" class="flex-1 py-1.5 rounded-md text-sm font-medium transition">Sign up</button>
+      <div x-show="authMode==='login'||authMode==='signup'" class="flex bg-stone-100 rounded-lg p-1 mb-5">
+        <button type="button" @click="setAuthMode('login')" :class="authMode==='login'?'bg-white shadow-sm text-stone-900':'text-stone-500'" class="flex-1 py-1.5 rounded-md text-sm font-medium transition">Log in</button>
+        <button type="button" @click="setAuthMode('signup')" :class="authMode==='signup'?'bg-white shadow-sm text-stone-900':'text-stone-500'" class="flex-1 py-1.5 rounded-md text-sm font-medium transition">Sign up</button>
       </div>
-      <form @submit.prevent="authMode==='login' ? login() : signup()" class="space-y-3">
+      <h2 x-show="authMode==='forgot'" class="font-medium text-stone-900 mb-4">Reset your password</h2>
+      <h2 x-show="authMode==='reset'" class="font-medium text-stone-900 mb-4">Choose a new password</h2>
+      <form @submit.prevent="submitAuth()" class="space-y-3">
         <div x-show="authMode==='signup'"><label class="label">Display name</label><input x-model="authForm.name" class="input" autocomplete="name" placeholder="Your name"></div>
-        <div><label class="label">Email</label><input x-model="authForm.email" type="email" class="input" autocomplete="email" placeholder="you@example.com" required></div>
-        <div><label class="label">Password</label><input x-model="authForm.password" type="password" class="input" :autocomplete="authMode==='login'?'current-password':'new-password'" placeholder="At least 6 characters" required></div>
+        <div x-show="authMode!=='reset'"><label class="label">Email</label><input x-model="authForm.email" type="email" class="input" autocomplete="email" placeholder="you@example.com" :required="authMode!=='reset'"></div>
+        <div x-show="authMode!=='forgot'"><label class="label" x-text="authMode==='reset' ? 'New password' : 'Password'"></label><input x-model="authForm.password" type="password" class="input" :autocomplete="authMode==='login'?'current-password':'new-password'" placeholder="At least 6 characters" :required="authMode!=='forgot'"></div>
         <p x-show="authError" class="text-sm text-red-600" x-text="authError"></p>
-        <button class="btn w-full" :disabled="busy" x-text="authMode==='login' ? 'Log in' : 'Create account'"></button>
+        <p x-show="authNotice" class="text-sm text-stone-700" x-text="authNotice"></p>
+        <button class="btn w-full" :disabled="busy" x-text="{ login: 'Log in', signup: 'Create account', forgot: 'Send reset link', reset: 'Save new password' }[authMode]"></button>
       </form>
+      <div x-show="serverAccounts" class="mt-3 text-center text-xs text-stone-500">
+        <button type="button" x-show="authMode==='login'" class="underline hover:text-stone-800" @click="setAuthMode('forgot')">Forgot your password?</button>
+        <button type="button" x-show="authMode==='forgot'" class="underline hover:text-stone-800" @click="setAuthMode('login')">Back to log in</button>
+      </div>
     </div>
     <div class="mt-4 text-center text-xs text-stone-500 space-y-2">
-      <p>Prototype: accounts and data are stored only in this browser.</p>
-      <button class="underline hover:text-stone-800" @click="seedDemo()">Create two demo accounts for testing groups</button>
+      <p x-show="serverAccounts">Your account works on any device. Journal entries are still saved only in this browser for now.</p>
+      <p x-show="!serverAccounts">Prototype: accounts and data are stored only in this browser.</p>
+      <button x-show="!serverAccounts" class="underline hover:text-stone-800" @click="seedDemo()">Create two demo accounts for testing groups</button>
     </div>
   </div>
 </section>
